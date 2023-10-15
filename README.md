@@ -1,4 +1,4 @@
-# COVID
+# COVID with flu vaccination rates 
 The COVID-19 pandemic has had a profound impact on public health and society as a whole. As millions of people around the world fell ill and many lost their lives, governments implemented various measures such as lockdowns and social distancing to slow the spread of the virus. One effect of these measures was a reduction in the transmission of other infectious diseases such as the flu, which typically spreads through close contact with infected individuals.
 
 Given the unique circumstances of the pandemic, it is important to understand how it may have affected healthcare utilization and vaccination rates. In particular, we are interested in exploring the relationship between the COVID-19 pandemic and the number of flu vaccinations in the United States. Our research question is whether there is a significant relationship between these two variables.
