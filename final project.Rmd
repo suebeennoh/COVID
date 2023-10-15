@@ -1,0 +1,430 @@
+---
+title: "Final Project"
+author: "Suebeen Noh, Eun Lee, Sebastian Algharaballi-yanow, Jonathan Park"
+output: html_document
+---
+
+## Introduction and Background
+
+The COVID-19 pandemic has had a profound impact on public health and society as a whole. As millions of people around the world fell ill and many lost their lives, governments implemented various measures such as lockdowns and social distancing to slow the spread of the virus. One effect of these measures was a reduction in the transmission of other infectious diseases such as the flu, which typically spreads through close contact with infected individuals.
+
+Given the unique circumstances of the pandemic, it is important to understand how it may have affected healthcare utilization and vaccination rates. In particular, we are interested in exploring the relationship between the COVID-19 pandemic and the number of flu vaccinations in the United States. Our research question is whether there is a significant relationship between these two variables.
+
+Previous research has suggested that there may be a link between COVID-19 and flu vaccination rates. For example, a study by Leuchter et al. (2022) found that the safety concerns and mistrust of the American government “spilled over'' to influenza vaccinations, meaning that COVID-19 vaccinations had an overall negative impact on flu vaccination rates. On the other hand, another study by Parker et al. (2022) found that influenza vaccination in the 2021–2022 season correlated with a 50% greater likelihood of complete COVID-19 vaccination, so people who trusted the COVID-19 vaccine had no problem obtaining their vaccination for the flu.
+
+By examining the relationship between the COVID-19 pandemic and flu vaccination rates, our study aims to contribute to our understanding of how the pandemic has affected healthcare utilization and public health more broadly. Through our analysis of publicly available data, we hope to shed light on this important issue and provide insights that can inform future public health efforts.
+
+References:
+
+Leuchter, R. K., Jackson, N. J., Mafi, J. N., & Sarkisian, C. A. (2022). Association between covid-19 vaccination and influenza vaccination rates. New England Journal of Medicine, 386(26), 2531–2532. https://doi.org/10.1056/nejmc2204560 
+
+Parker, A. M., Atshan, S., Walsh, M. M., Gidengil, C. A., & Vardavas, R. (2022). Association of covid-19 vaccination with influenza vaccine history and changes in influenza vaccination. JAMA Network Open, 5(11). https://doi.org/10.1001/jamanetworkopen.2022.41888 
+
+
+## Question
+
+Is there a significant relationship between the COVID-19 pandemic and the number of flu vaccinations in the United States?
+
+## Packages
+
+```{r, message=FALSE}
+library(tidyverse)
+library(tidymodels)
+```
+
+## Data
+
+We start off with importing our Flu and COVID vaccination data. 
+
+```{r}
+flu <- read.csv("data.csv")
+```
+
+```{r}
+covid_vac <- read.csv("daily-covid-data.csv")
+```
+
+
+## Data Wrangling
+
+#### Covid Data
+
+Since our COVID dataframe contains information across multiple countries, we need to filter the dataframe for only USA data. The first line filters the covid_vac data frame to only keep the rows where the `Code` column is equal to "USA". Then, the second line resets the row names of the data frame to be sequential integers, starting from 1. This is done using the `rownames()` function with the argument `NULL`, which tells R to reset the row names to the default sequential integers.
+
+```{r}
+covid_vac <- covid_vac[covid_vac$Code == "USA",]
+rownames(covid_vac) <- NULL
+```
+
+Now, we rename the column name corresponding to total vaccinations in order to keep our data tidy and easy to read.
+
+```{r}
+colnames(covid_vac)[colnames(covid_vac) == "new_vaccinations_smoothed_per_million"] <- "Vaccinations"
+```
+
+Since our data corresponds to vaccinations per million, we must manually transform the colummn to represent the total count of vaccinations.
+
+```{r}
+covid_vac$Vaccinations <- covid_vac$Vaccinations * 1000000
+```
+
+Then, we needed to convert our `Day` column into Date format in order to properly carry out our analyses that will involve time data.
+
+```{r}
+covid_vac$Day <- as.POSIXct(covid_vac$Day, format = "%Y-%m-%d")
+```
+
+We can use our new Date formatted column to extract the Month and Year from each variable and send those values to new columns titled "Month" and "Year".
+
+```{r}
+covid_vac$Month <- as.numeric(format(covid_vac$Day, "%m"))
+covid_vac$Year <- as.numeric(format(covid_vac$Day, "%Y"))
+```
+
+Now, we wanted to create a monthly sum of vaccinations for the purpose of having another variable to compare vaccincation data by month and year upon. We do so by grouping by "Year" and "Month", piping that grouped data into the `summarize()` function (where it summarizes the data by Month and Year), and then creating a new column called `Monthly_Vaccinations` by summing up the Vaccinations column for each month and year. Finally, the resulting dataframe is assigned to a new variable called `covid_vac.`
+
+```{r, warning=FALSE}
+covid_vac <- covid_vac |>
+  group_by(Year, Month) |>
+  summarize(Month, Year, Monthly_Vaccinations=sum(Vaccinations))
+```
+
+Finally, we use the `distinct()` function to remove any duplicate rows from the `covid_vac` data frame.
+
+```{r}
+covid_vac <- distinct(covid_vac)
+```
+
+We can now move on to wrangling our Flu data!
+
+#### Flu Data
+
+The Flu data set we imported from the CDC had a lot of information to work with. Since many pre-existing variables were not relevant to our project, we first selected the columns we wanted to work with.
+
+```{r}
+flu <- subset(flu, select=-c(Current_Season_Week_Ending_Label, 
+                             Current_Through, 
+                             MMWR_Day,
+                             Location_and_Flu_Season_Order))
+```
+
+Then, we had to change the columns to the appropriate types. If the data is not in a correct format, it could make later computation much more difficult.
+
+```{r}
+flu$Doses <- gsub(",", "", flu$Doses)
+flu$Cumulative_Doses <- gsub(",", "", flu$Cumulative_Doses)
+flu$Doses <- as.integer(flu$Doses)
+flu$Cumulative_Doses <- as.integer(flu$Cumulative_Doses)
+```
+
+Similar to our COVID date data, we needed to change the `Week_ID` in our Flu data set to Date format.
+
+```{r}
+flu$Week_ID <- as.POSIXct(flu$Week_ID, format = "%m/%d/%Y")
+```
+
+We now needed to define what our COVID timeline was defined as. This would make our later comparisons regarding Flu vaccinations and the state of the pandemic much easier to compute. We created a function for this task, which checks if the date is within the range of March 13, 2020 (the day many schools shut down), to April 1, 2022 (the day when mask mandates across the United States were lifted). The function returns `TRUE` if the Date variable is located within this time frame, and `FALSE` if not. Then, the function is applied to the `Week_ID` column of the flu data frame using `sapply.` The resulting logical values (i.e., TRUE or FALSE) are assigned to a new column called "Covid" in the flu data frame.
+
+```{r}
+covid_col <- function(col) {
+  cov_start <- as.POSIXct("3/13/2020", format = "%m/%d/%Y")
+  cov_end <- as.POSIXct("4/1/2022", format = "%m/%d/%Y")
+  if (col >= cov_start & col < cov_end) {
+    return(TRUE)
+  } else {
+    return(FALSE)
+  }
+}
+
+flu$Covid <- sapply(flu$Week_ID, covid_col)
+```
+
+Similar to our COVID data, we created a new column called "Month", which extracts the month value from the `Week_ID` variable and assigns that value to the column. 
+
+```{r}
+flu$Month <- as.numeric(format(flu$Week_ID, "%m"))
+```
+
+Next, we wanted to rename the "MMWR_Week" and "MMWR_Year" columns to the simple names of "Week" and "Year" for clarity purposes.
+
+```{r}
+colnames(flu)[colnames(flu) == "MMWR_Week"] <- "Week"
+colnames(flu)[colnames(flu) == "MMWR_Year"] <- "Year"
+```
+
+We discovered that some of our "Year" variables were formatted incorrectly in our existing dataframe, so we formatted those values to numerical types.
+
+```{r}
+flu$Year <- as.numeric(format(flu$Week_ID, "%Y"))
+```
+
+#### Join Datasets
+
+Finally, we joined together our two data sets by performing a left join operation based on the columns "Year" and "Month". The resulting data frame is stored in a new variable called "merged".
+
+```{r}
+merged <- left_join(flu, covid_vac, by = c("Year", "Month"))
+head(merged)
+```
+
+Our wrangling is now complete! We are ready to move on to our Exploratory Data Analysis.
+
+## Exploratory Data Analysis
+
+```{r}
+# Group the data by Influenza_Season and calculate total doses per season
+season_totals <- flu %>%
+  group_by(Influenza_Season) %>%
+  summarize(total_doses = sum(Doses))
+
+# Plot the total doses per season
+ggplot(data = season_totals, aes(x = Influenza_Season, y = total_doses, fill = Influenza_Season)) +
+  geom_col() +
+  labs(x = "Influenza Season", y = "Total Doses", title = "Total Flu Vaccinations by Influenza Season") +
+  theme_bw() +
+  scale_y_continuous(labels = scales::comma_format())
+```
+
+This visualization showcases the total recorded Flu vaccinations by season from 2019 to 2023. In our data, an Influenza season is defined as the months from August to May of the next respective year. After looking at the graph, we can clearly see that the Flu season of 2020-2021 recorded the highest number of vaccinations when compared to the other years. This is very interesting, as this was also a time period that we consider one of the “peaks” of the COVID-19 pandemic. We can also see that the Influenza season of 2022-2023 had the lowest amount of vaccinations in this group. However, this may be due to the fact that the 2023 Flu season is technically not over yet, so there will be more Flu vaccinations for the rest of March, April, and May that have not been recorded yet.
+
+
+```{r}
+ggplot(data = flu, aes(x = Influenza_Season, y = Doses, fill = Setting)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_y_continuous(labels = function(x) format(x, scientific = FALSE)) +
+  scale_fill_manual(values = c("#69b3a2", "#404080", "#cc99ff"), 
+                    labels = c("Combined", "Pharmacy", "Physician Medical Office")) +
+  labs(title = "Flu Vaccination Distribution by Setting",
+       x = "Influenza Season", y = "Doses Administered") +
+  theme_bw()
+```
+
+This visualization corresponds to Flu vaccination distribution by setting by Flu season. Our data contains two vaccination settings that reported where people obtained their Flu shot: Pharmacy and Physician Medical Office. We wanted to make this graph in order to see if the general public prefers one vaccination site over another. Sure enough, our visualization does show that people tend to receive their Flu shot at pharmacies rather than a medical office, and that once again, the Flu season of 2020-2021 showcases the highest number of recorded vaccines compared to the other years. COVID-19 vaccines were generally administered at pharmacies and health clinics compared to an actual medical office, so we wonder whether the noticeable spike in pharmacy vaccines are due to the people receiving their COVID-19 vaccine at a pharmacy and seeing advertisements around the store for Flu vaccinations, or simply due to the general ease of a walk-in Flu shot appointment at your local Walgreens or Rite-Aid.
+
+
+```{r}
+merged_combined <- merged |>
+  filter(Setting == "Combined")
+
+merged_combined_Week <- aggregate(Doses ~ Week_ID + Covid, data = merged, FUN = mean)
+
+ggplot(data = merged_combined, aes(x = Week_ID, y = Doses, color = Covid)) + 
+  geom_line() +
+  geom_point() +
+  scale_color_manual(values = c("darkgreen", "red")) +
+  labs(color = "COVID Year", title = "Flu vaccination by Covid Year", x="Week of Operation", y="Influenza Doses Administered") +
+  theme_classic() +
+  scale_y_continuous(labels = scales::comma_format())
+```
+
+We noticed that there were overlaps in the settings column with doses so we filtered the setting column to only include settings that had both pharmacy and physical medical office. Along with the filtering, we splitted the data into subsets to calculate the average of doses and called it a new dataframe. 
+
+The plot shows the average doses administered per year over a period of 5 years, from 2019 to 2023, with the highlight on COVID in 2020 and 2021. It's worth noting that the plot highlights the COVID months in 2020 and 2021, showing a surge in the number of doses administered during those Covid years. This observation is in line with the fact that COVID-19 pandemic led to a worldwide push for vaccination to control the spread of the virus.
+
+
+```{r}
+newmerged <- merged |>
+  filter(Setting == "Combined")
+
+ggplot(newmerged, aes(x=Week_ID, y=Doses)) +
+  geom_line() +
+  facet_wrap(~Year) +
+  labs(
+    title = "Number of Influenza Doses per week in the US, Separated by Year",
+    y="Number of Influenza Doses Given",
+    x="Date"
+  )
+```
+
+The graph shows the trend of weekly doses for influenza split by year ranging from 2019 to 2023. We see that each year’s trend follows a similar pattern, all rapidly peaking in October, before falling back down just as rapidly. Through this observation we realized it may be useful to observe October more than any other month since October seems to be when the majority of people get the flu shot. Looking at the graph we see that year 2019 is incomplete and is missing the first couple of months. Year 2023 is currently following a similar trend to the other years with a slight dip in its first months.
+
+
+```{r, warning=FALSE}
+newmerged <- merged |>
+  filter(Setting == "Combined")
+
+newmerged <- newmerged |>
+  group_by(Year, Month) |>
+  summarise(sum(Doses), Monthly_Vaccinations, Covid) |>
+  distinct()
+
+colnames(newmerged)[3] = "Doses"
+colnames(newmerged)[4] = "Covid_Vaccinations"
+
+newmerged <- newmerged |>
+  mutate(Year_Month = paste(Year, Month, sep = "-"))
+
+```
+
+We realized that if we want to compare doses of the influenza vaccine with covid vaccines, we would need to match the dates together. Since covid vaccinations are measured monthly, we summed up all the weekly doses for influenza for each given month. This will allow us to plot covid vaccinations side by side with influenza vaccinations.
+
+```{r}
+ggplot(newmerged, aes(x=Month, y=Doses, color=Year)) +
+  geom_line(aes(group = Year)) +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::comma_format()) +
+  labs(
+    title="Monthly Influenza Distribution Trends in the US separated by Year",
+    y="Influenza Doses Administered"
+  ) +
+  scale_x_continuous(breaks=pretty_breaks())
+```
+
+This plot depicts the trend of monthly influenza doses split into different colors by year. Like mentioned above, we see that October is when the vaccine gets distributed the most throughout all years. One notable observation is that year 2020 recorded the highest peak (October Doses) of influenza doses, with a decent gap above the other years. Covid became pretty relevant during 2020 so there may be a potential relationship between an increase in influenza shots and the prevalence of Covid that we could explore during analysis. Another observation is that year 2022 actually had the lowest peak (October Doses) compared to the other years. Many of the Covid policies were lifted during 2022 so this may be another indication of a relationship between Covid prevalence and Influenza Doses.
+
+```{r}
+newdf <- newmerged |>
+  na.omit()
+ggplot(newdf, aes(x=Month, y=Covid_Vaccinations)) +
+  geom_line() +
+  facet_wrap(~Year) +
+  labs(
+    title = "Covid Vaccination Trend Separated by Year",
+    y="Covid Vaccinations",
+    x="Months"
+  ) +
+  scale_x_continuous(breaks=pretty_breaks())
+```
+
+The visualization shows the Covid vaccination trend throughout the years 2020 to 2023. The plot shows that 2021 was the year majority of Covid vaccinations were distributed, with its highest peak being on April. Unlike the influenza vaccination, there was no significant jump during month 10. However, when looking at year 2022, we see that there was a noticeable, albeit small, jump on October, which may be a potential correlation between flu shots and vaccination shots.
+
+## Analysis
+
+To begin our data analysis, we want to start by seeing the difference in flu shot vaccinations in Covid weeks and non-Covid weeks. If we can visually see that there is a difference between the two groups, we can begin to identify which way flu vaccination trends may have gone as a result of COVID-19.
+
+```{r}
+only_combined <- merged |>
+  filter(Setting=="Combined")
+
+only_combined$Covid <- factor(only_combined$Covid, levels = c(TRUE, FALSE))
+
+means <- aggregate(Doses ~ Covid, data = only_combined, FUN = mean)
+
+ggplot(means, aes(x = Covid, y = Doses, fill=Covid)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("red", "darkgreen"), 
+                    labels = c("TRUE", "FALSE")) +
+  labs(title = "Average Number of Doses per Week", 
+       x = "COVID Time", 
+       y = "Average Doses")
+```
+
+Above is a bar plot of the average number of flu vaccine doses distributed per week, separated by whether the week was during Covid or not. The average number of doses was higher in non-Covid times, which is useful for informing our t-test to check for statistical significance.
+
+```{r}
+newmerged$Covid <- factor(newmerged$Covid, levels = c(TRUE, FALSE))
+
+ggplot(newmerged, aes(x=Month, y=Doses, color=Covid)) +
+  geom_line() +
+  facet_wrap(~Covid) +
+  labs(
+    title="Monthly Trend of Influenza Vaccinations separated by Covid prevelance"
+  ) + 
+  scale_color_manual(values = c("red", "darkgreen"), 
+                    labels = c(TRUE, FALSE)) +
+  scale_x_continuous(breaks=pretty_breaks()) +
+  scale_y_continuous(labels = scales::comma_format())
+```
+
+The faceted line graph above displays similar information to the bar plot from before, but looks at the distribution of total flu vaccines over a calendar year for the 5 years of our investigation (2019-2023). We can see that vaccine shots tend to spike around October, and that there were more total doses administered during Covid times than not.
+
+Following this information, we conducted a two sample t-test with the following hypotheses
+- Null: there is no difference in the average number of flu doses in Covid and non-Covid weeks.
+- Alternative: there were less average doses given in Covid time than non-Covid time.
+
+```{r}
+covid_doses <- merged |>
+  filter(Setting=="Combined") |>
+  filter(Covid==TRUE) |>
+  reframe(Doses)
+
+non_covid_doses <- merged |>
+  filter(Setting=="Combined") |>
+  filter(Covid==FALSE) |>
+  reframe(Doses)
+```
+
+```{r}
+t.test(covid_doses$Doses, non_covid_doses$Doses, alternative="less")
+```
+
+The t-test resulted in a p-value of 0.1546, which is not below the standard alpha threshold of 0.05 and thus we fail to reject the null hypothesis.
+
+We also investigated if there might be a difference in Before, During and After Covid times with the same criteria to see if pre-Covid numbers are causing the test to be muddled.
+
+```{r}
+before_during_covid <- merged |>
+  filter(Setting=="Combined") |>
+  filter(Week_ID < "2022-4-1")
+
+after_covid <- merged |>
+  filter(Setting=="Combined") |>
+  filter(Week_ID >= "2022-4-1")
+
+t.test(after_covid$Doses, before_during_covid$Doses, alternative="greater")
+```
+
+However, even separating the before/during and after periods did not allow us to reject the null hypothesis, which leads us to believe that there is no statistically significant difference in the number of flu vaccines administered after the COVID-19 pandemic.
+
+```{r}
+covid_label <- function(col) {
+  cov_start <- as.POSIXct("3/13/2020", format = "%m/%d/%Y")
+  cov_end <- as.POSIXct("4/1/2022", format = "%m/%d/%Y")
+  if (col < cov_start) {
+    return("before")
+  } else if (col >= cov_start & col < cov_end) {
+    return("during")
+  } else {
+    return("after")
+  }
+}
+
+only_combined$timeline <- sapply(only_combined$Week_ID, covid_label)
+
+only_combined$timeline <- factor(only_combined$timeline, levels = c("before", "during", "after"))
+
+label_means <- aggregate(Doses ~ timeline, data = only_combined, FUN = mean)
+
+ggplot(label_means, aes(x = timeline, y = Doses, fill=timeline)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("darkgreen", "red", "darkgreen"), 
+                    labels = c("before", "during", "after")) +
+  labs(title = "Average Number of Flu Vaccine Doses per Week", 
+       x = "COVID Timeline", 
+       y = "Average Doses")
+```
+
+The bar plot above shows the full distribution of average flu vaccines administered per week in the times before, during, and after Covid. There seems to be a sharp decline during Covid time in average flu vaccines administered.
+
+Finally, a linear model was fit to try to ascertain the relationship between Covid weeks and the number of administered flu doses.
+```{r}
+covid_lm <- lm(Doses ~ Covid, data = only_combined)
+tidy(covid_lm)
+glance(covid_lm)$adj.r.squared
+```
+
+The standard error of the CovidFALSE feature is 389336.6, which is extremely high and indicates more variation and a less precise estimate. This was a result that could be somewhat expected, as the number of flu vaccination doses is a variable that is difficult to attribute to a single feature, especially as one as general as a Covid month or not. Looking at the adjusted R-squared value of 0.0001807708 tells a similar story of how the model cannot be reliably used to predict flu vaccination doses using Covid months, as the fit is close to 0%. 
+
+
+We now run a linear model on the data showing that there is a weaker linear relationship between amount of does over time.  
+```{r, message=FALSE}
+merged_combined_Year <- aggregate(Doses ~ Year + Covid, data = merged, FUN = mean)
+
+ggplot(data=merged_combined_Year, mapping = aes(x = Year, y = Doses)) +
+  geom_point() +
+  geom_jitter() +
+  geom_smooth(method = "lm") +
+  labs(x = "year", y = "amount of doses") +
+  theme(plot.title.position = "plot")
+```
+
+## Results
+By our exploratory data analysis, we discovered that the peak of covid and the year with the greatest flu vaccine rate were both in 2020 and 2021 at the pharmacies than medical offices. This isn't just a trend because, in 2022–2023, both the covid and flu vaccine rates decreased. Through our visualization, we were able to see both vaccinations' spike during 2020-2021, which indicates the consistency with the fact that the COVID-19 pandemic plays a big part in getting the flu vaccination. 
+
+With our “Monthly Influenza Distribution Trends in the US separated by Year” visualization, we can also infer that the rates were at its highest during the winter season, especially during October, then falling back down right after October. In taking a deeper look at the relationship between covid rates and flu vaccination rates, we realized that there were numerous associations between the two since influenza hit its peak during the 2020-2021 and had decreased starting year 2022 where covid also had mask lifting policies during 2022. 
+
+These indications let us to quantify our observations so we used a t-test to analyze the difference in before & during and after covid periods and see the association between these two periods of time in order to quantify our observation in our exploratory data analysis. The null hypothesis, which results in no statistically significant difference in the quantity of flu vaccines given out following the COVID pandemic, was not, however, able to be rejected. Also, we developed a linear model for the number of administered flu doses and the number of covid weeks, which resulted in an incredibly large standard error. Also, the extremely low corrected R-squared value indicates that there is no discernible link between receiving a flu shot and having cold months.
+
+## Conclusion
+
+When we first began our investigation into the possible relationship between COVID-19 and how it may have affected flu vaccinations, our original thinking was that flu vaccination numbers would have increased because of the more widespread knowledge of the importance of vaccinations and greater fear of sickness. However, working through our data has taught us that this is not necessarily the case, and it is difficult to attribute something so large as the country’s flu vaccination numbers to a singular variable. In fact, we think it is more likely that the COVID-19 pandemic may have actually led to fewer people getting flu vaccinations for a variety of reasons, namely the rise of negative discourse surrounding vaccines and the fact that less people go outside in general with work-from-home and online schooling options. Our previous assumptions were challenged when we actually looked at and investigated the data for ourselves, leading to a change in mindset and curiosity to figure out if this change is correct. If we were to conduct further investigation, we would want to work with a larger dataset of flu vaccinations, perhaps split by states or regions, and examine if different areas of the United States have changed flu vaccination rates after COVID-19. In conclusion, we were unable to fully determine a relationship between flu vaccinations and the COVID-19 pandemic, but walk away from this project with a renewed appreciation for data analysis and the perspective it can provide for those who yield it.
